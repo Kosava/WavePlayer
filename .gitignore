@@ -1,0 +1,115 @@
+# ==========================================
+# Python
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ==========================================
+# Logs
+# ==========================================
+*.log
+logs/
+debug.log
+
+# ==========================================
+# IDE / Editors
+# ==========================================
+
+# VSCode
+.vscode/
+
+# PyCharm / IntelliJ
+.idea/
+
+# Sublime
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+
+# ==========================================
+# OS files
+# ==========================================
+.DS_Store
+Thumbs.db
+
+# ==========================================
+# Qt / Build artifacts
+# ==========================================
+*.qrc.depends
+*.qmlc
+*.jsc
+
+# ==========================================
+# Runtime / Cache
+# ==========================================
+.cache/
+.tmp/
+temp/
+
+# ==========================================
+# User configuration
+# ==========================================
+config.json
+settings.json
+
+# ==========================================
+# Plugin runtime data
+# ==========================================
+plugins_data/
+plugins_cache/
+
+# ==========================================
+# Media / test files
+# ==========================================
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.mp3
+*.flac
+
+# ==========================================
+# Torrent temporary files
+# ==========================================
+*.torrent
+*.fastresume
+*.parts
+*.part
+
+# ==========================================
+# Python testing
+# ==========================================
+.coverage
+htmlcov/
+.pytest_cache/
+
+# ==========================================
+# Build tools
+# ==========================================
+*.spec

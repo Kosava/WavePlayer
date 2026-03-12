@@ -1,0 +1,9 @@
+# WavePlayer - Dependencies
+# ========================
+# Core
+PyQt6>=6.5.0
+python-mpv>=1.0.0
+
+# Optional - za buduće faze
+# mutagen>=1.47.0      # metadata čitanje
+# pillow>=10.0.0       # thumbnail generisanje
