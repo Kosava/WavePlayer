@@ -59,6 +59,7 @@ class ThemeColors:
     # Gradient za progress
     progress_gradient_start: str = "#e50914"
     progress_gradient_end: str = "#ff4444"
+    buffer_color: str = "rgba(255, 255, 255, 0.15)"  # torrent buffer traka
 
 
 @dataclass

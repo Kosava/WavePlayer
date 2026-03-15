@@ -39,12 +39,8 @@ from core.config import Config
 from .themes import (
     THEMES,
     THEME_META,
-    OSD_THEMES,
-    OSD_THEME_META,
     ThemeColors,
-    OsdTheme,
     get_theme,
-    get_osd_theme,
 )
 
 logger = logging.getLogger(__name__)
@@ -123,82 +119,6 @@ class ThemePreviewWidget(QFrame):
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit(self._theme_key)
-        super().mousePressEvent(event)
-
-
-class OsdPreviewWidget(QFrame):
-    """Preview widget za OSD temu."""
-
-    clicked = pyqtSignal(str)
-
-    def __init__(self, osd_key: str, osd_theme: OsdTheme, meta: dict, parent=None) -> None:
-        super().__init__(parent)
-        self._osd_key = osd_key
-        self._theme = osd_theme
-        self._meta = meta
-        self._selected = False
-
-        self.setFixedSize(130, 80)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setObjectName("themeCard")
-        self._setup_ui()
-
-    def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 4)
-        layout.setSpacing(3)
-
-        # Mini OSD preview
-        preview = QFrame(self)
-        preview.setFixedHeight(44)
-        br = self._theme.border_radius
-        bg = self._theme.bg
-        border = self._theme.border if self._theme.border != "none" else "none"
-        border_css = f"border: {border};" if border != "none" else ""
-        preview.setStyleSheet(f"""
-            QFrame {{
-                background-color: {bg};
-                border-radius: {min(br, 10)}px;
-                {border_css}
-            }}
-        """)
-
-        preview_layout = QVBoxLayout(preview)
-        preview_layout.setContentsMargins(8, 4, 8, 4)
-        preview_layout.setSpacing(2)
-
-        icon = QLabel("▶", preview)
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setStyleSheet(f"color: {self._theme.text_color}; font-size: 14px; background: transparent;")
-
-        bar = QFrame(preview)
-        bar.setFixedHeight(3)
-        bar.setStyleSheet(f"""
-            QFrame {{
-                background-color: {self._theme.progress_fill.split(',')[0] if ',' in self._theme.progress_fill else self._theme.progress_fill};
-                border-radius: 1px;
-            }}
-        """)
-
-        preview_layout.addWidget(icon)
-        preview_layout.addWidget(bar)
-        layout.addWidget(preview)
-
-        # Naziv
-        name = QLabel(self._meta.get("name", self._osd_key))
-        name.setObjectName("themeCardName")
-        name.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(name)
-
-    def set_selected(self, selected: bool) -> None:
-        self._selected = selected
-        self.setProperty("selected", "true" if selected else "false")
-        self.style().unpolish(self)
-        self.style().polish(self)
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit(self._osd_key)
         super().mousePressEvent(event)
 
 
@@ -294,7 +214,6 @@ class SettingsDialog(QDialog):
 
     Signali:
         theme_changed(str) - emituje se kad korisnik odabere novu temu
-        osd_theme_changed(str) - emituje se kad korisnik odabere novu OSD temu
         settings_changed() - emituje se kad se bilo koje podešavanje promeni
     """
 
@@ -303,7 +222,6 @@ class SettingsDialog(QDialog):
     SIDEBAR_WIDTH: int = 180
 
     theme_changed = pyqtSignal(str)
-    osd_theme_changed = pyqtSignal(str)
     settings_changed = pyqtSignal()
 
     # Navigacione kategorije: (id, ikona, naziv)
@@ -313,7 +231,7 @@ class SettingsDialog(QDialog):
         ("audio", "🔊", "Audio"),
         ("video", "🖥", "Video / Engine"),
         ("subtitles", "💬", "Titlovi"),
-        ("torrent", "🔽", "Torrent"),
+        ("torrent", "🔽", "Streaming"),
         ("plugins", "🧩", "Plugini"),
         ("interface", "🪟", "Interfejs"),
         ("shortcuts", "⌨", "Prečice"),
@@ -329,11 +247,9 @@ class SettingsDialog(QDialog):
 
         # Trenutne vrednosti za teme
         self._current_theme = config.get("ui.theme", "midnight_red")
-        self._current_osd_theme = config.get("ui.osd_theme", "minimal")
 
         # Preview widgeti za selekciju
         self._theme_cards: Dict[str, ThemePreviewWidget] = {}
-        self._osd_cards: Dict[str, OsdPreviewWidget] = {}
 
         self.setWindowTitle("Settings")
         self.setObjectName("settingsDialog")
@@ -514,31 +430,6 @@ class SettingsDialog(QDialog):
         container.setStyleSheet("background: transparent;")
         group1.add_widget(container)
         layout.addWidget(group1)
-
-        # OSD teme
-        group2 = SettingsGroup("OSD Overlay tema")
-
-        osd_grid = QGridLayout()
-        osd_grid.setSpacing(10)
-
-        col = 0
-        row = 0
-        for key in OSD_THEMES:
-            meta = OSD_THEME_META.get(key, {"name": key, "icon": "🎬"})
-            card = OsdPreviewWidget(key, OSD_THEMES[key], meta)
-            card.clicked.connect(self._on_osd_theme_selected)
-            self._osd_cards[key] = card
-            osd_grid.addWidget(card, row, col)
-            col += 1
-            if col >= 4:
-                col = 0
-                row += 1
-
-        osd_container = QWidget()
-        osd_container.setLayout(osd_grid)
-        osd_container.setStyleSheet("background: transparent;")
-        group2.add_widget(osd_container)
-        layout.addWidget(group2)
 
         # OSD podešavanja
         group3 = SettingsGroup("OSD podešavanja")
@@ -1103,7 +994,32 @@ class SettingsDialog(QDialog):
 
     def _create_torrent_page(self) -> QWidget:
         scroll, layout = self._make_scroll_page()
-        self._add_page_header(layout, "Torrent", "Streaming i preuzimanje torrent fajlova")
+        self._add_page_header(layout, "Streaming", "YouTube, torrent i mrežni streamovi")
+
+        # ── YouTube ──
+        g_yt = SettingsGroup("YouTube (yt-dlp)")
+
+        self._yt_quality = QComboBox()
+        self._yt_quality.setObjectName("settingsCombo")
+        self._yt_quality.addItems([
+            "Audio Only",
+            "360p",
+            "480p",
+            "720p",
+            "1080p",
+            "Best",
+        ])
+        g_yt.add_row("Podrazumevani kvalitet", self._yt_quality,
+                      "Default kvalitet za YouTube — može se promeniti i u YouTube dialogu")
+
+        self._yt_max_playlist = QSpinBox()
+        self._yt_max_playlist.setObjectName("settingsSpin")
+        self._yt_max_playlist.setRange(10, 500)
+        self._yt_max_playlist.setSingleStep(10)
+        g_yt.add_row("Max stavki u playlisti", self._yt_max_playlist,
+                      "Koliko stavki maksimalno izvući iz YouTube playliste")
+
+        layout.addWidget(g_yt)
 
         # ── Download ──
         g_dl = SettingsGroup("Preuzimanje")
@@ -1214,14 +1130,14 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return scroll
 
-    # ── 7. Plugini (izmenjena stranica) ──
+    # ── 7. Plugini ──
 
     def _create_plugins_page(self) -> QWidget:
         """Plugin stranica sa enable/configure opcijama."""
         scroll, layout = self._make_scroll_page()
         self._add_page_header(layout, "Plugini", "Instalirani WavePlayer plugini")
 
-        group = SettingsGroup("Plugin lista")
+        group = SettingsGroup("Instalirani plugini")
 
         if not self._plugin_mgr:
             group.add_widget(QLabel("Plugin manager nije dostupan"))
@@ -1229,57 +1145,91 @@ class SettingsDialog(QDialog):
             return scroll
 
         for plugin in self._plugin_mgr.get_all_plugins():
+            # Dohvati info — koristi get_info() ako postoji, inače atribute
+            if hasattr(plugin, "get_info"):
+                info = plugin.get_info()
+                name = info.name
+                version = info.version
+                desc = info.description
+                icon = info.icon
+            else:
+                name = getattr(plugin, "name", plugin.__class__.__name__)
+                version = getattr(plugin, "version", "1.0")
+                desc = getattr(plugin, "description", "")
+                icon = "🧩"
+
             container = QFrame()
             container.setObjectName("pluginCard")
+            container.setStyleSheet("""
+                QFrame#pluginCard {
+                    border: 1px solid rgba(255,255,255,0.06);
+                    border-radius: 8px;
+                    padding: 8px;
+                    margin-bottom: 4px;
+                }
+            """)
 
-            c_layout = QHBoxLayout(container)
+            # Glavni layout: info levo | kontrole desno
+            row = QHBoxLayout(container)
+            row.setContentsMargins(10, 8, 10, 8)
+            row.setSpacing(12)
 
-            name = getattr(plugin, "name", plugin.__class__.__name__)
-            version = getattr(plugin, "version", "1.0")
-            desc = getattr(plugin, "description", "")
-
+            # ── Leva strana: ikona + ime + opis ──
             info_layout = QVBoxLayout()
+            info_layout.setSpacing(2)
 
-            title = QLabel(f"{name} v{version}")
-            title.setStyleSheet("font-weight: bold")
+            title_label = QLabel(f"{icon}  {name}")
+            title_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+            info_layout.addWidget(title_label)
 
-            description = QLabel(desc)
-            description.setWordWrap(True)
+            if desc:
+                desc_label = QLabel(desc)
+                desc_label.setWordWrap(True)
+                desc_label.setStyleSheet("font-size: 11px; color: #888;")
+                info_layout.addWidget(desc_label)
 
-            info_layout.addWidget(title)
-            info_layout.addWidget(description)
+            version_label = QLabel(f"v{version}")
+            version_label.setStyleSheet("font-size: 10px; color: #666;")
+            info_layout.addWidget(version_label)
 
-            c_layout.addLayout(info_layout)
+            row.addLayout(info_layout, 1)  # stretch=1 da uzme prostor
 
-            # ENABLE checkbox
-            enabled = QCheckBox("Enabled")
-            enabled.setChecked(
+            # ── Desna strana: toggle + configure ──
+            controls = QVBoxLayout()
+            controls.setSpacing(6)
+            controls.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+            enabled_chk = QCheckBox("Aktivan")
+            enabled_chk.setChecked(
                 self._config.get_plugin_enabled(name, True)
             )
-            enabled.stateChanged.connect(
+            enabled_chk.stateChanged.connect(
                 lambda state, n=name: self._toggle_plugin(n, state)
             )
+            controls.addWidget(enabled_chk)
 
-            # CONFIGURE dugme - IZMENJEN HANDLER
-            config_btn = QPushButton("Configure")
             if hasattr(plugin, "configure"):
+                config_btn = QPushButton("⚙ Podesi")
+                config_btn.setFixedWidth(90)
+                config_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 config_btn.clicked.connect(
                     lambda _, p=plugin: self._configure_plugin(p)
                 )
-            else:
-                config_btn.setEnabled(False)
+                controls.addWidget(config_btn)
 
-            c_layout.addWidget(enabled)
-            c_layout.addWidget(config_btn)
+            row.addLayout(controls)
 
             group.add_widget(container)
 
         layout.addWidget(group)
 
-        # RELOAD dugme
-        reload_btn = QPushButton("Reload plugins")
+        # Reload dugme
+        reload_layout = QHBoxLayout()
+        reload_layout.addStretch()
+        reload_btn = QPushButton("🔄 Ponovo učitaj plugine")
         reload_btn.clicked.connect(self._reload_plugins)
-        layout.addWidget(reload_btn)
+        reload_layout.addWidget(reload_btn)
+        layout.addLayout(reload_layout)
 
         layout.addStretch()
         return scroll
@@ -1466,8 +1416,6 @@ class SettingsDialog(QDialog):
         # Teme - označi selektovane
         for key, card in self._theme_cards.items():
             card.set_selected(key == self._current_theme)
-        for key, card in self._osd_cards.items():
-            card.set_selected(key == self._current_osd_theme)
 
         # OSD
         self._osd_display_ms.setValue(cfg.get("ui.osd_display_ms", 1500))
@@ -1615,6 +1563,10 @@ class SettingsDialog(QDialog):
         else:
             self._sub_filter_regex.setEditText(regex_val)
 
+        # YouTube
+        self._yt_quality.setCurrentIndex(cfg.get("plugins.youtube.default_quality", 0))
+        self._yt_max_playlist.setValue(cfg.get("plugins.youtube.max_playlist_items", 100))
+
         # Torrent
         dl_dir = cfg.get("torrent.download_dir", "")
         idx = self._torrent_dir.findText(dl_dir)
@@ -1657,7 +1609,6 @@ class SettingsDialog(QDialog):
 
         # Teme
         cfg.set("ui.theme", self._current_theme)
-        cfg.set("ui.osd_theme", self._current_osd_theme)
         cfg.set("ui.osd_display_ms", self._osd_display_ms.value())
         cfg.set("ui.show_osd", self._osd_show_check.isChecked())
 
@@ -1755,6 +1706,10 @@ class SettingsDialog(QDialog):
         cfg.set("subtitles.filter_sdh", self._sub_filter_sdh.isChecked())
         cfg.set("subtitles.filter_regex", self._sub_filter_regex.currentText())
 
+        # YouTube
+        cfg.set("plugins.youtube.default_quality", self._yt_quality.currentIndex())
+        cfg.set("plugins.youtube.max_playlist_items", self._yt_max_playlist.value())
+
         # Torrent
         cfg.set("torrent.download_dir", self._torrent_dir.currentText())
         cfg.set("torrent.buffer_mb", self._torrent_buffer.value())
@@ -1800,13 +1755,6 @@ class SettingsDialog(QDialog):
         # Emituj za live preview
         self.theme_changed.emit(key)
 
-    def _on_osd_theme_selected(self, key: str) -> None:
-        """Korisnik je odabrao novu OSD temu."""
-        self._current_osd_theme = key
-        for k, card in self._osd_cards.items():
-            card.set_selected(k == key)
-        self.osd_theme_changed.emit(key)
-
     def _on_apply(self) -> None:
         """Primeni i sačuvaj sva podešavanja."""
         self._save_values()
@@ -1816,10 +1764,8 @@ class SettingsDialog(QDialog):
     def _on_reset(self) -> None:
         """Vrati na default vrednosti."""
         self._current_theme = "midnight_red"
-        self._current_osd_theme = "minimal"
         self._load_values()
         self.theme_changed.emit(self._current_theme)
-        self.osd_theme_changed.emit(self._current_osd_theme)
 
     def _on_clear_recent(self) -> None:
         """Obriši nedavne fajlove."""

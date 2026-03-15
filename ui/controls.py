@@ -1,6 +1,7 @@
 """Playback control bar widget.
 
 Bottom bar with progress slider, play/pause, volume, settings, etc.
+Progress slider podržava prikaz buffer napretka za torrent streaming.
 
 PORTABILITY NOTES:
   - C++: QFrame with identical widget tree
@@ -19,16 +20,72 @@ from PyQt6.QtWidgets import (
     QStyleOptionSlider,
     QStyle,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QMouseEvent
+from PyQt6.QtCore import Qt, pyqtSignal, QRect
+from PyQt6.QtGui import QMouseEvent, QPainter, QColor, QLinearGradient, QPen
 
 
-class ClickableSlider(QSlider):
-    """QSlider koji dozvoljava klik-to-seek na bilo koju poziciju.
+class BufferedProgressSlider(QSlider):
+    """Custom progress slider sa tri vizuelne zone:
 
-    Standardni QSlider pomera handle samo za jedan "page step" pri kliku.
-    Ovaj override pomera handle direktno na mesto klika.
+    1. Groove (pozadina)     — tamna boja (slider_groove)
+    2. Buffer zona           — svetlija boja, prikazuje koliko je torrent
+                               buffered unapred (buffer_color)
+    3. Played zona           — akcent gradient, prikazuje trenutnu poziciju
+                               (progress_gradient_start → progress_gradient_end)
+
+    Buffer zona se prikazuje samo kad je buffer_ratio > 0.
+    Klik-to-seek radi kao i pre.
     """
+
+    def __init__(self, orientation=Qt.Orientation.Horizontal, parent=None):
+        super().__init__(orientation, parent)
+        self._buffer_ratio: float = 0.0  # 0.0 – 1.0
+
+        # Boje — postavljaju se iz styles.py
+        self._groove_color = QColor("#2a2a2a")
+        self._buffer_color = QColor(255, 255, 255, 38)  # rgba(255,255,255,0.15)
+        self._gradient_start = QColor("#e50914")
+        self._gradient_end = QColor("#ff4444")
+        self._handle_color = QColor("#ffffff")
+        self._handle_border_color = QColor("#e50914")
+
+    # --- Buffer API ---
+
+    def set_buffer_ratio(self, ratio: float) -> None:
+        """Postavi buffer napredak (0.0 – 1.0). 0 = nema buffer prikaza."""
+        self._buffer_ratio = max(0.0, min(1.0, ratio))
+        self.update()
+
+    def buffer_ratio(self) -> float:
+        return self._buffer_ratio
+
+    # --- Boje API ---
+
+    def set_colors(
+        self,
+        groove: str = "",
+        buffer: str = "",
+        grad_start: str = "",
+        grad_end: str = "",
+        handle: str = "",
+        handle_border: str = "",
+    ) -> None:
+        """Postavi boje iz teme."""
+        if groove:
+            self._groove_color = QColor(groove)
+        if buffer:
+            self._buffer_color = _parse_color(buffer)
+        if grad_start:
+            self._gradient_start = QColor(grad_start)
+        if grad_end:
+            self._gradient_end = QColor(grad_end)
+        if handle:
+            self._handle_color = QColor(handle)
+        if handle_border:
+            self._handle_border_color = QColor(handle_border)
+        self.update()
+
+    # --- Click-to-seek ---
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -55,6 +112,95 @@ class ClickableSlider(QSlider):
             self.sliderMoved.emit(val)
             event.accept()
         super().mousePressEvent(event)
+
+    # --- Custom Paint ---
+
+    def paintEvent(self, event) -> None:
+        """Crta groove → buffer → played → handle."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w = self.width()
+        h = self.height()
+
+        # Dimenzije groove-a
+        groove_h = 5
+        groove_y = (h - groove_h) // 2
+        groove_r = groove_h // 2  # border-radius
+
+        # Handle dimenzije
+        handle_w = 14
+        handle_h = 14
+        handle_r = handle_w // 2
+
+        # Usable area (bez pola handle-a na krajevima)
+        margin = handle_w // 2
+        usable_w = w - handle_w
+
+        # Pozicije kao ratio
+        val_range = self.maximum() - self.minimum()
+        if val_range > 0:
+            played_ratio = (self.value() - self.minimum()) / val_range
+        else:
+            played_ratio = 0.0
+
+        played_x = margin + int(usable_w * played_ratio)
+        buffer_x = margin + int(usable_w * self._buffer_ratio)
+
+        # 1) Groove pozadina (cela traka)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._groove_color)
+        painter.drawRoundedRect(
+            margin, groove_y, usable_w, groove_h, groove_r, groove_r
+        )
+
+        # 2) Buffer zona (ako postoji)
+        if self._buffer_ratio > 0.0 and buffer_x > margin:
+            painter.setBrush(self._buffer_color)
+            buf_w = min(buffer_x - margin, usable_w)
+            painter.drawRoundedRect(
+                margin, groove_y, buf_w, groove_h, groove_r, groove_r
+            )
+
+        # 3) Played zona (gradient)
+        if played_ratio > 0.0:
+            grad = QLinearGradient(margin, 0, played_x, 0)
+            grad.setColorAt(0.0, self._gradient_start)
+            grad.setColorAt(1.0, self._gradient_end)
+            painter.setBrush(grad)
+            play_w = max(0, played_x - margin)
+            painter.drawRoundedRect(
+                margin, groove_y, play_w, groove_h, groove_r, groove_r
+            )
+
+        # 4) Handle
+        handle_cx = played_x
+        handle_cy = h // 2
+        handle_rect = QRect(
+            handle_cx - handle_r, handle_cy - handle_r,
+            handle_w, handle_h
+        )
+
+        # Handle border
+        painter.setPen(QPen(self._handle_border_color, 2))
+        painter.setBrush(self._handle_color)
+        painter.drawEllipse(handle_rect)
+
+        painter.end()
+
+
+def _parse_color(s: str) -> QColor:
+    """Parse boju iz stringa — podržava hex i rgba()."""
+    s = s.strip()
+    if s.startswith("rgba("):
+        # rgba(255, 255, 255, 0.15)
+        inner = s[5:].rstrip(")")
+        parts = [p.strip() for p in inner.split(",")]
+        if len(parts) == 4:
+            r, g, b = int(parts[0]), int(parts[1]), int(parts[2])
+            a = float(parts[3])
+            return QColor(r, g, b, int(a * 255))
+    return QColor(s)
 
 
 class ControlBar(QFrame):
@@ -102,7 +248,7 @@ class ControlBar(QFrame):
         self._time_label.setFixedWidth(55)
         self._time_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        self._progress_slider = ClickableSlider(Qt.Orientation.Horizontal, self)
+        self._progress_slider = BufferedProgressSlider(Qt.Orientation.Horizontal, self)
         self._progress_slider.setObjectName("progressSlider")
         self._progress_slider.setRange(0, 1000)
         self._progress_slider.setValue(0)
@@ -241,10 +387,34 @@ class ControlBar(QFrame):
 
     def reset(self) -> None:
         self._progress_slider.setValue(0)
+        self._progress_slider.set_buffer_ratio(0.0)
         self._time_label.setText("0:00")
         self._duration_label.setText("0:00")
         self._duration = 0.0
         self.set_playing(False)
+
+    def set_buffer_ratio(self, ratio: float) -> None:
+        """Postavi buffer napredak (0.0 – 1.0) za torrent streaming."""
+        self._progress_slider.set_buffer_ratio(ratio)
+
+    def set_progress_colors(
+        self,
+        groove: str = "",
+        buffer: str = "",
+        grad_start: str = "",
+        grad_end: str = "",
+        handle: str = "",
+        handle_border: str = "",
+    ) -> None:
+        """Postavi boje progress slidera iz teme."""
+        self._progress_slider.set_colors(
+            groove=groove,
+            buffer=buffer,
+            grad_start=grad_start,
+            grad_end=grad_end,
+            handle=handle,
+            handle_border=handle_border,
+        )
 
     # --- Privatne metode ---
 

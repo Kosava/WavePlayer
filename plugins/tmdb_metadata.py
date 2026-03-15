@@ -9,6 +9,7 @@ Preuzima metapodatke o filmovima i serijama sa The Movie Database (TMDb):
 TMDb API v3 — besplatan uz registraciju na https://www.themoviedb.org/
 
 Koristi se sa shortcut-om ili context menu-jem za prikaz info panela.
+UI prikaz je u tmdb_dialog.py.
 """
 
 import json
@@ -145,6 +146,25 @@ class TMDbPlugin(WavePlugin):
 
     # --- Javne metode ---
 
+    def show_metadata(self, file_path: str = "", parent=None) -> None:
+        """Prikaži metadata dijalog za dati fajl ili trenutni.
+
+        Ovo je glavna metoda koju main_window poziva iz context menija.
+        Ako file_path nije dat, koristi se trenutno pušteni fajl.
+        """
+        from ui.tmdb_dialog import TMDbMetadataDialog
+
+        if not file_path and self.context:
+            file_path = self.context.get_current_file()
+
+        if not file_path:
+            if self.context:
+                self.context.show_osd("Prvo učitaj video fajl", 2000)
+            return
+
+        dialog = TMDbMetadataDialog(self, file_path, parent)
+        dialog.exec()
+
     def lookup_current(self) -> Optional[MediaMetadata]:
         """Potraži metapodatke za trenutno pušteni fajl."""
         if not self._api_key or not self.context:
@@ -164,6 +184,29 @@ class TMDbPlugin(WavePlugin):
             return None
 
         # Da li je serija (ima sezonu/epizodu)?
+        if parsed.get("season"):
+            meta = self._search_tv(title, parsed)
+        else:
+            meta = self._search_movie(title, parsed.get("year", ""))
+
+        if meta:
+            self._cache[file_path] = meta
+        return meta
+
+    def lookup_file(self, file_path: str) -> Optional[MediaMetadata]:
+        """Potraži metapodatke za specifičan fajl (za welcome screen itd.)."""
+        if not self._api_key:
+            return None
+
+        # Keš po putanji
+        if file_path in self._cache:
+            return self._cache[file_path]
+
+        parsed = _parse_filename(os.path.basename(file_path))
+        title = parsed["title"]
+        if not title:
+            return None
+
         if parsed.get("season"):
             meta = self._search_tv(title, parsed)
         else:
@@ -199,6 +242,13 @@ class TMDbPlugin(WavePlugin):
             lines.append(desc)
 
         return "\n".join(lines)
+
+    def get_poster_url(self, file_path: str) -> str:
+        """Vrati poster URL za fajl (za welcome screen thumbnails)."""
+        meta = self._cache.get(file_path)
+        if meta:
+            return meta.poster_url
+        return ""
 
     # --- Interne metode ---
 
@@ -314,3 +364,98 @@ class TMDbPlugin(WavePlugin):
         except Exception as e:
             logger.warning(f"TMDb TV search greška: {e}")
             return None
+
+    def configure(self, parent=None) -> None:
+        """Podešavanja TMDb plugina — API ključ i jezik."""
+        from PyQt6.QtWidgets import (
+            QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+            QLineEdit, QComboBox, QPushButton, QMessageBox,
+        )
+        from PyQt6.QtCore import Qt
+
+        dlg = QDialog(parent)
+        dlg.setWindowTitle("TMDb podešavanja")
+        dlg.setMinimumWidth(420)
+
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        # API ključ
+        layout.addWidget(QLabel("TMDb API ključ (v3):"))
+        key_edit = QLineEdit()
+        key_edit.setPlaceholderText("Unesi API ključ sa themoviedb.org")
+        key_edit.setText(self._api_key)
+        key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        layout.addWidget(key_edit)
+
+        # Prikaz/sakrivanje ključa
+        show_key_btn = QPushButton("👁 Prikaži")
+        show_key_btn.setCheckable(True)
+        show_key_btn.toggled.connect(
+            lambda checked: key_edit.setEchoMode(
+                QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+            )
+        )
+
+        key_row = QHBoxLayout()
+        key_row.addWidget(QLabel(
+            '<a href="https://www.themoviedb.org/settings/api" style="color:#4fc3f7;">Preuzmi API ključ</a>'
+        ))
+        key_row.itemAt(0).widget().setOpenExternalLinks(True)
+        key_row.addStretch()
+        key_row.addWidget(show_key_btn)
+        layout.addLayout(key_row)
+
+        # Jezik
+        layout.addWidget(QLabel("Jezik metapodataka:"))
+        lang_combo = QComboBox()
+        languages = [
+            ("Engleski", "en-US"),
+            ("Srpski", "sr-RS"),
+            ("Hrvatski", "hr-HR"),
+            ("Nemački", "de-DE"),
+            ("Francuski", "fr-FR"),
+            ("Španski", "es-ES"),
+            ("Italijanski", "it-IT"),
+            ("Portugalski", "pt-PT"),
+            ("Ruski", "ru-RU"),
+            ("Japanski", "ja-JP"),
+            ("Korejski", "ko-KR"),
+            ("Kineski", "zh-CN"),
+        ]
+        for name, code in languages:
+            lang_combo.addItem(name, code)
+        idx = lang_combo.findData(self._language)
+        if idx >= 0:
+            lang_combo.setCurrentIndex(idx)
+        layout.addWidget(lang_combo)
+
+        # Dugmad
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        save_btn = QPushButton("Sačuvaj")
+        cancel_btn = QPushButton("Otkaži")
+        save_btn.clicked.connect(dlg.accept)
+        cancel_btn.clicked.connect(dlg.reject)
+        btn_row.addWidget(save_btn)
+        btn_row.addWidget(cancel_btn)
+        layout.addLayout(btn_row)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            new_key = key_edit.text().strip()
+            new_lang = lang_combo.currentData()
+
+            self._api_key = new_key
+            self._language = new_lang
+
+            # Sačuvaj u config
+            if self.context:
+                self.context.set_config("plugins.tmdb.api_key", new_key)
+                self.context.set_config("plugins.tmdb.language", new_lang)
+
+            # Očisti keš jer se jezik možda promenio
+            self._cache.clear()
+
+            logger.info(f"TMDb: api_key={'set' if new_key else 'empty'}, lang={new_lang}")

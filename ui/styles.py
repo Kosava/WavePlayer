@@ -137,23 +137,26 @@ QSlider::handle:horizontal:hover {{
     border-radius: 7px;
 }}
 
-/* Progress slider */
+/* Progress slider — custom painted, ali groove height za sizing */
 #progressSlider::groove:horizontal {{
     height: 5px;
+    background: transparent;
 }}
 
 #progressSlider::sub-page:horizontal {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 {colors.progress_gradient_start}, stop:1 {colors.progress_gradient_end});
+    background: transparent;
+}}
+
+#progressSlider::add-page:horizontal {{
+    background: transparent;
 }}
 
 #progressSlider::handle:horizontal {{
     width: 14px;
     height: 14px;
     margin: -5px 0;
-    border-radius: 7px;
-    border: 2px solid {colors.handle_border};
-    background-color: {colors.slider_handle};
+    background: transparent;
+    border: none;
 }}
 
 /* Volume slider */

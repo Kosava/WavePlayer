@@ -47,6 +47,8 @@ class MpvEngine(MediaEngineInterface):
         self._speed: float = 1.0
         self._window_id: Optional[int] = None
         self._last_error: Optional[str] = None
+        self._pending_seek_pos: Optional[float] = None
+        self._pending_seek_time: float = 0.0
 
     def initialize(self) -> bool:
         if not HAS_MPV:
@@ -207,6 +209,8 @@ class MpvEngine(MediaEngineInterface):
 
     def seek(self, position_seconds: float) -> None:
         if self._player:
+            self._pending_seek_pos = position_seconds
+            self._pending_seek_time = time.time()
             self._player.seek(position_seconds, reference="absolute")
 
     def get_state(self) -> PlaybackState:
@@ -216,6 +220,14 @@ class MpvEngine(MediaEngineInterface):
         return self._duration
 
     def get_position(self) -> float:
+        # Ako je nedavno seekovano (< 0.5s), koristi pending poziciju
+        # umesto mpv-ove prijavljene (koja kasni kod brzog seekovanja)
+        if (
+            self._pending_seek_pos is not None
+            and (time.time() - self._pending_seek_time) < 0.5
+        ):
+            return self._pending_seek_pos
+        self._pending_seek_pos = None
         return self._position
 
     def get_volume(self) -> int:
@@ -350,6 +362,23 @@ class MpvEngine(MediaEngineInterface):
     def set_deinterlace(self, enabled: bool) -> None:
         if self._player:
             self._player["deinterlace"] = "yes" if enabled else "no"
+
+    def set_ytdl_format(self, fmt: str) -> None:
+        """Postavi yt-dlp format za YouTube kvalitet.
+
+        mpv koristi ytdl-format property da kaže yt-dlp-u koji
+        kvalitet/format da izvuče. Ovo se mora postaviti PRE loadfile().
+
+        Args:
+            fmt: ytdl format string, npr. 'bestaudio/best',
+                 'bestvideo[height<=720]+bestaudio/best', itd.
+        """
+        if self._player:
+            try:
+                self._player["ytdl-format"] = fmt
+                logger.info(f"ytdl-format postavljeno: {fmt}")
+            except Exception as e:
+                logger.warning(f"set_ytdl_format greška: {e}")
 
     def screenshot(self, mode: str = "subtitles") -> None:
         if self._player:

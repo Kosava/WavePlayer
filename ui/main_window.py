@@ -26,17 +26,10 @@ from PyQt6.QtWidgets import (
     QMenu,
     QInputDialog,
     QDialog,
-    QListWidget,
-    QListWidgetItem,
-    QPushButton,
-    QLabel,
-    QLineEdit,
-    QProgressBar,
     QMessageBox,
-    QComboBox,
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QThread
-from PyQt6.QtGui import QKeyEvent, QAction, QKeySequence, QShortcut, QColor
+from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal
+from PyQt6.QtGui import QKeyEvent, QAction, QKeySequence, QShortcut
 
 from core.interfaces import PlaybackState, EngineEventCallback
 from core.mpv_engine import MpvEngine, is_subtitle_file
@@ -46,8 +39,7 @@ from core.config import Config, CONFIG_DIR
 
 # Plugin imports
 from plugins import PluginManager, PluginContext
-from plugins.plugin_api import SubtitlePlugin, SubtitleResult
-from plugins.subtitle_search import SubtitleSearchPlugin, compute_opensubtitles_hash
+from plugins.subtitle_search import compute_opensubtitles_hash
 
 from .title_bar import TitleBar
 from .video_widget import VideoWidget
@@ -57,214 +49,10 @@ from .overlay import OsdOverlay
 from .torrent_overlay import TorrentOverlay
 from .styles import get_stylesheet
 from .settings_dialog import SettingsDialog
-from .subtitle_dialog import SubtitleSearchDialog  # Kreiraćemo ovaj fajl
+from .subtitle_dialog import SubtitleSearchDialog
+from .youtube_dialog import YouTubeDialog
 
 logger = logging.getLogger(__name__)
-
-
-class SubtitleSearchWorker(QThread):
-    """Worker thread for subtitle search to avoid blocking UI."""
-    
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
-    
-    def __init__(self, plugin: SubtitleSearchPlugin, query: str, languages: List[str], 
-                 file_path: str = "", file_hash: str = ""):
-        super().__init__()
-        self._plugin = plugin
-        self._query = query
-        self._languages = languages
-        self._file_path = file_path
-        self._file_hash = file_hash
-    
-    def run(self):
-        try:
-            results = self._plugin.search(
-                self._query, self._languages, self._file_hash, self._file_path
-            )
-            self.finished.emit(results)
-        except Exception as e:
-            self.error.emit(str(e))
-
-
-class SubtitleSearchDialog(QDialog):
-    """Dialog for searching and downloading subtitles."""
-    
-    def __init__(self, plugin: SubtitleSearchPlugin, file_path: str, parent=None):
-        super().__init__(parent)
-        
-        self._plugin = plugin
-        self._file_path = file_path
-        self._results: List[SubtitleResult] = []
-        self._selected_result: Optional[SubtitleResult] = None
-        self._worker: Optional[SubtitleSearchWorker] = None
-        
-        self.setWindowTitle("Pretraga titlova")
-        self.setMinimumSize(700, 500)
-        self.setModal(True)
-        
-        self._setup_ui()
-        self._start_search()
-    
-    def _setup_ui(self):
-        layout = QVBoxLayout(self)
-        
-        # Search query
-        query_layout = QHBoxLayout()
-        query_layout.addWidget(QLabel("Pretraga:"))
-        
-        self._query_edit = QLineEdit()
-        self._query_edit.setPlaceholderText("Naziv filma/serije...")
-        self._query_edit.setText(os.path.splitext(os.path.basename(self._file_path))[0])
-        query_layout.addWidget(self._query_edit)
-        
-        self._search_btn = QPushButton("🔍 Traži")
-        self._search_btn.clicked.connect(self._start_search)
-        query_layout.addWidget(self._search_btn)
-        
-        layout.addLayout(query_layout)
-        
-        # Language selection
-        lang_layout = QHBoxLayout()
-        lang_layout.addWidget(QLabel("Jezik:"))
-        
-        self._lang_combo = QComboBox()
-        languages = [
-            ("Srpski", "sr"),
-            ("Engleski", "en"),
-            ("Hrvatski", "hr"),
-            ("Bosanski", "bs"),
-            ("Nemački", "de"),
-            ("Francuski", "fr"),
-            ("Španski", "es"),
-            ("Italijanski", "it"),
-            ("Ruski", "ru"),
-        ]
-        for name, code in languages:
-            self._lang_combo.addItem(name, code)
-        self._lang_combo.setCurrentIndex(0)  # Srpski
-        lang_layout.addWidget(self._lang_combo)
-        lang_layout.addStretch()
-        
-        layout.addLayout(lang_layout)
-        
-        # Results list
-        self._results_list = QListWidget()
-        self._results_list.setAlternatingRowColors(True)
-        self._results_list.itemDoubleClicked.connect(self._download_selected)
-        layout.addWidget(self._results_list, 1)
-        
-        # Progress bar
-        self._progress = QProgressBar()
-        self._progress.setVisible(False)
-        layout.addWidget(self._progress)
-        
-        # Buttons
-        btn_layout = QHBoxLayout()
-        
-        self._download_btn = QPushButton("⬇ Preuzmi")
-        self._download_btn.clicked.connect(self._download_selected)
-        self._download_btn.setEnabled(False)
-        btn_layout.addWidget(self._download_btn)
-        
-        btn_layout.addStretch()
-        
-        self._cancel_btn = QPushButton("Odustani")
-        self._cancel_btn.clicked.connect(self.reject)
-        btn_layout.addWidget(self._cancel_btn)
-        
-        layout.addLayout(btn_layout)
-    
-    def _start_search(self):
-        query = self._query_edit.text().strip()
-        if not query:
-            return
-        
-        # Clear previous results
-        self._results_list.clear()
-        self._results = []
-        self._download_btn.setEnabled(False)
-        
-        # Show progress
-        self._progress.setVisible(True)
-        self._progress.setRange(0, 0)  # Indeterminate
-        self._search_btn.setEnabled(False)
-        
-        # Get selected language
-        lang_code = self._lang_combo.currentData()
-        
-        # Calculate file hash
-        file_hash = compute_opensubtitles_hash(self._file_path)
-        
-        # Start worker thread
-        self._worker = SubtitleSearchWorker(
-            self._plugin, query, [lang_code], self._file_path, file_hash
-        )
-        self._worker.finished.connect(self._on_search_finished)
-        self._worker.error.connect(self._on_search_error)
-        self._worker.start()
-    
-    def _on_search_finished(self, results: List[SubtitleResult]):
-        self._results = results
-        
-        self._progress.setVisible(False)
-        self._search_btn.setEnabled(True)
-        
-        if not results:
-            item = QListWidgetItem("❌ Nema pronađenih titlova")
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            self._results_list.addItem(item)
-            return
-        
-        for r in results:
-            # Create display text
-            title = r.title[:60] + "..." if len(r.title) > 60 else r.title
-            lang = r.language_name
-            rating = f"★ {r.rating:.1f}" if r.rating > 0 else ""
-            downloads = f"⬇ {r.download_count}" if r.download_count > 0 else ""
-            provider = f"[{r.provider}]"
-            hash_match = "✓ TAČAN" if r.hash_match else ""
-            
-            text = f"{title} - {lang} {provider}"
-            if rating:
-                text += f" {rating}"
-            if downloads:
-                text += f" {downloads}"
-            if hash_match:
-                text += f" {hash_match}"
-            
-            item = QListWidgetItem(text)
-            item.setData(Qt.ItemDataRole.UserRole, r)
-            
-            # Color based on hash match
-            if r.hash_match:
-                item.setForeground(QColor("#00FF00"))
-            elif r.rating > 7:
-                item.setForeground(QColor("#FFFF00"))
-            
-            self._results_list.addItem(item)
-    
-    def _on_search_error(self, error_msg: str):
-        self._progress.setVisible(False)
-        self._search_btn.setEnabled(True)
-        
-        QMessageBox.warning(self, "Greška", f"Došlo je do greške pri pretrazi:\n{error_msg}")
-    
-    def _download_selected(self):
-        current = self._results_list.currentItem()
-        if not current:
-            return
-        
-        result = current.data(Qt.ItemDataRole.UserRole)
-        if not result:
-            return
-        
-        self._selected_result = result
-        self.accept()
-    
-    @property
-    def selected_result(self) -> Optional[SubtitleResult]:
-        return self._selected_result
 
 
 class MainWindow(QMainWindow):
@@ -301,7 +89,7 @@ class MainWindow(QMainWindow):
         
         self._torrent_ready_signal.connect(self._play_torrent_file)
         self._torrent_callbacks.on_ready_to_play = self._on_torrent_ready
-        self._torrent_callbacks.on_progress = lambda s: None
+        self._torrent_callbacks.on_progress = self._on_torrent_progress
         self._torrent_callbacks.on_state_changed = lambda s: None
 
         # Plugin system initialization
@@ -320,7 +108,6 @@ class MainWindow(QMainWindow):
         self._init_engine()
 
         self._apply_theme(self._config.get("ui.theme", "midnight_red"))
-        self._overlay.set_osd_theme(self._config.get("ui.osd_theme", "minimal"))
 
         # Popuni welcome screen sa nedavnim fajlovima
         self._refresh_welcome()
@@ -506,7 +293,7 @@ class MainWindow(QMainWindow):
 
     def _open_subtitle_search(self) -> None:
         """Open subtitle search dialog."""
-        if not self._current_file:  # PATCH 3: koristi self._current_file umesto hasattr provere
+        if not self._current_file:
             self._overlay.show_title("Prvo učitaj video fajl")
             return
         
@@ -517,21 +304,20 @@ class MainWindow(QMainWindow):
             return
         
         dialog = SubtitleSearchDialog(subtitle_plugin, self._current_file, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_result:
-            # Download and load selected subtitle
-            result = dialog.selected_result
-            dest_dir = os.path.join(str(CONFIG_DIR), "subtitles")
-            os.makedirs(dest_dir, exist_ok=True)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Ako je dialog već preuzeo titl (dugme "Preuzmi" u dialogu)
+            path = dialog.downloaded_path
             
-            # IZMENA: Umesto dohvatanja specifičnog provider plugina,
-            # koristimo SubtitleSearch plugin za download
-            plugin = self._plugin_mgr.get_plugin("SubtitleSearch")
-            if not plugin:
-                logger.error("SubtitleSearch plugin nije pronađen")
-                self._overlay.show_title("❌ Greška: Plugin za titlove nije dostupan")
-                return
+            if not path and dialog.selected_result:
+                # Fallback: dialog nije preuzeo, preuzmi ovde
+                result = dialog.selected_result
+                dest_dir = os.path.join(str(CONFIG_DIR), "subtitles")
+                os.makedirs(dest_dir, exist_ok=True)
+                
+                plugin = self._plugin_mgr.get_plugin("SubtitleSearch")
+                if plugin:
+                    path = plugin.download(result, dest_dir)
             
-            path = plugin.download(result, dest_dir)
             if path:
                 self._on_subtitle_dropped(path)
                 self._overlay.show_title(f"Titl učitan: {os.path.basename(path)}")
@@ -541,10 +327,42 @@ class MainWindow(QMainWindow):
     def _open_youtube_search(self) -> None:
         """Open YouTube search dialog."""
         youtube_plugin = self._plugin_mgr.get_plugin("YouTube")
-        if youtube_plugin and hasattr(youtube_plugin, "show_search_dialog"):
-            youtube_plugin.show_search_dialog(self)
-        else:
+        if not youtube_plugin:
             self._overlay.show_title("YouTube plugin nije dostupan")
+            return
+
+        dialog = YouTubeDialog(youtube_plugin, self._config, self)
+        dialog.setStyleSheet(self.styleSheet())
+
+        # Povezivanje signala
+        dialog.play_requested.connect(self._on_youtube_play)
+        dialog.add_requested.connect(self._on_youtube_add)
+
+        dialog.exec()
+
+    def _on_youtube_play(self, url: str) -> None:
+        """Pusti YouTube URL sa izabranim kvalitetom."""
+        # Postavi ytdl-format na mpv pre učitavanja
+        dialog = self.sender()
+        if dialog and hasattr(dialog, 'get_quality_format'):
+            fmt = dialog.get_quality_format()
+            self._engine.set_ytdl_format(fmt)
+
+        self._load_file(url)
+        quality = ""
+        if dialog and hasattr(dialog, 'get_quality_label'):
+            quality = f" [{dialog.get_quality_label()}]"
+        self._overlay.show_title(f"▶ YouTube{quality}", 3000)
+
+    def _on_youtube_add(self, urls: list) -> None:
+        """Dodaj YouTube URL-ove u playlist."""
+        dialog = self.sender()
+        if dialog and hasattr(dialog, 'get_quality_format'):
+            fmt = dialog.get_quality_format()
+            self._engine.set_ytdl_format(fmt)
+
+        self._add_to_playlist(urls)
+        self._overlay.show_title(f"➕ Dodato {len(urls)} YouTube stavki", 3000)
 
     # --- Shortcut handlers ---
 
@@ -655,14 +473,25 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self, theme_name: str) -> None:
         self.setStyleSheet(get_stylesheet(theme_name))
+        # OSD prati boje UI teme
+        if hasattr(self, '_overlay'):
+            self._overlay.set_theme_colors(theme_name)
+        # Progress slider boje iz teme
+        if hasattr(self, '_controls'):
+            from core.themes import get_theme
+            colors = get_theme(theme_name)
+            self._control_bar.set_progress_colors(
+                groove=colors.slider_groove,
+                buffer=colors.buffer_color,
+                grad_start=colors.progress_gradient_start,
+                grad_end=colors.progress_gradient_end,
+                handle=colors.slider_handle,
+                handle_border=colors.handle_border,
+            )
         logger.info(f"Primenjena tema: {theme_name}")
 
     def _on_theme_changed(self, theme_name: str) -> None:
         self._apply_theme(theme_name)
-
-    def _on_osd_theme_changed(self, theme_name: str) -> None:
-        self._overlay.set_osd_theme(theme_name)
-        self._overlay.show_title("OSD Theme Preview")
 
     # --- Settings ---
 
@@ -670,17 +499,13 @@ class MainWindow(QMainWindow):
         
         dialog = SettingsDialog(self._config, self._plugin_mgr, self)
         dialog.theme_changed.connect(self._on_theme_changed)
-        dialog.osd_theme_changed.connect(self._on_osd_theme_changed)
         old_theme = self._config.get("ui.theme", "midnight_red")
-        old_osd = self._config.get("ui.osd_theme", "minimal")
         dialog.setStyleSheet(get_stylesheet(old_theme))
         result = dialog.exec()
         if result != SettingsDialog.DialogCode.Accepted:
             self._apply_theme(old_theme)
-            self._overlay.set_osd_theme(old_osd)
         else:
             self._apply_theme(self._config.get("ui.theme", "midnight_red"))
-            self._overlay.set_osd_theme(self._config.get("ui.osd_theme", "minimal"))
             # Primeni subtitle promene na mpv
             self._engine.apply_subtitle_config(self._config)
             # Primeni torrent promene
@@ -877,13 +702,7 @@ class MainWindow(QMainWindow):
             self._overlay.show_title("Prvo učitaj video fajl")
             return
         
-        filename = os.path.basename(self._current_file)
-        # Extract movie name from filename (simplified)
-        import re
-        movie_name = re.sub(r'[._\[\]\(\)]', ' ', filename)
-        movie_name = re.sub(r'\s+(19|20)\d{2}.*$', '', movie_name).strip()
-        
-        tmdb_plugin.show_metadata(movie_name, self)
+        tmdb_plugin.show_metadata(self._current_file, self)
 
     def _get_context_menu_style(self) -> str:
         from .themes import get_theme
@@ -1055,6 +874,19 @@ class MainWindow(QMainWindow):
         """Torrent je bufferovao dovoljno — pokreni playback (thread-safe via signal)."""
         self._torrent_ready_signal.emit(video_path)
 
+    def _on_torrent_progress(self, status) -> None:
+        """Torrent progress callback — ažurira buffer prikaz u seek baru.
+
+        Poziva se iz torrent thread-a. Qt update() na widgetu je
+        thread-safe jer interno šalje paint event u main thread.
+        status.progress je ukupan download progress (0.0 – 1.0).
+        """
+        try:
+            if hasattr(status, 'progress'):
+                self._control_bar.set_buffer_ratio(status.progress)
+        except Exception:
+            pass  # Ignoriši greške iz torrent thread-a
+
     def _play_torrent_file(self, video_path: str) -> None:
         """Pokreni video iz torrenta (poziva se iz main thread-a)."""
         logger.info(f"Pokrećem torrent video: {video_path}")
@@ -1190,6 +1022,9 @@ class MainWindow(QMainWindow):
 
         if self._engine.load(file_path):
             self._video_widget.hide_drop_zone()
+            # Reset buffer prikaza ako nije torrent stream
+            if not TorrentEngine.is_torrent_source(file_path):
+                self._control_bar.set_buffer_ratio(0.0)
             name = os.path.basename(file_path)
             self._title_bar.set_title(f"{self.APP_NAME} - {name}")
             self._overlay.show_title(name)
@@ -1274,6 +1109,7 @@ class MainWindow(QMainWindow):
                 self.setGeometry(self._pre_fs_geometry)
             self.show()
         self._control_bar.set_fullscreen_icon(self._is_fullscreen)
+        self._overlay.set_fullscreen(self._is_fullscreen)
         self.setFocus()
 
     def _toggle_playlist(self) -> None:
